@@ -123,7 +123,8 @@ async function main() {
 
   const ok = await cache.healthCheck()
   if (!ok) {
-    console.error('WARNING: health check failed, starting proxy anyway')
+    console.error('ERROR: health check failed — cache must be working')
+    process.exit(1)
   }
 
   server.listen(PORT, '127.0.0.1', () => {

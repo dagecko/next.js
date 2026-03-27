@@ -12,6 +12,14 @@ inputs:
     description: 'SCCACHE_BASE_DIR for path normalization (default: $GITHUB_WORKSPACE)'
     required: false
     default: ''
+  target:
+    description: 'Rust target triple (e.g. x86_64-pc-windows-msvc) for dep cache key'
+    required: false
+    default: ''
+  profile:
+    description: 'Cargo profile name (e.g. release, release-with-assertions) for dep cache key'
+    required: false
+    default: 'release'
 runs:
   using: 'composite'
   steps:
@@ -21,13 +29,21 @@ runs:
       with:
         tool: sccache@0.14.0
 
+    - name: Restore Rust dep cache
+      if: ${{ inputs.mode == 'start' }}
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.turbo-api }}" ]; then
+          export TURBO_API="${{ inputs.turbo-api }}"
+        fi
+        node scripts/rust-dep-cache.js --restore \
+          --target "${{ inputs.target }}" \
+          --profile "${{ inputs.profile }}"
+
     - name: Configure sccache env + start proxy
       if: ${{ inputs.mode == 'start' }}
       shell: bash
       run: |
-        # Override TURBO_API if the caller specified one (needed when the workflow
-        # overrides TURBO_TOKEN with a Vercel token but the runner's bashrc points
-        # TURBO_API at a self-hosted server that doesn't accept Vercel tokens).
         if [ -n "${{ inputs.turbo-api }}" ]; then
           export TURBO_API="${{ inputs.turbo-api }}"
         fi
@@ -51,20 +67,15 @@ runs:
         echo "SCCACHE_BASE_DIR=${{ inputs.base-dir || github.workspace }}" >> $GITHUB_ENV
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
-        # Enable sccache debug logging to see cache key computation
-        echo "SCCACHE_LOG=sccache=debug" >> $GITHUB_ENV
-        echo "SCCACHE_ERROR_LOG=${RUNNER_TEMP}/sccache-debug.log" >> $GITHUB_ENV
 
     - name: Start sccache server
       if: ${{ inputs.mode == 'start' }}
       shell: bash
       run: |
-        echo "SCCACHE_BASE_DIR=${SCCACHE_BASE_DIR}"
-        echo "SCCACHE_WEBDAV_ENDPOINT=${SCCACHE_WEBDAV_ENDPOINT}"
         sccache --start-server 2>&1 || echo "sccache server may already be running"
-        sccache --show-stats 2>&1 | head -20
+        sccache --show-stats 2>&1 | grep "Cache location"
 
-    - name: Stop sccache + show stats
+    - name: Stop sccache + save dep cache
       if: ${{ inputs.mode == 'stop' }}
       shell: bash
       run: |
@@ -72,38 +83,27 @@ runs:
         sccache --show-stats || true
         sccache --stop-server 2>/dev/null || true
 
+        # Save dep cache (proc-macros, build scripts, fingerprints)
+        if [ -n "${{ inputs.turbo-api }}" ]; then
+          export TURBO_API="${{ inputs.turbo-api }}"
+        fi
+        node scripts/rust-dep-cache.js --save \
+          --target "${{ inputs.target }}" \
+          --profile "${{ inputs.profile }}" || true
+
         # Stop the proxy (sends SIGTERM which triggers log dump)
         if [ -f ${RUNNER_TEMP}/sccache-turbo-proxy.pid ]; then
           kill $(cat ${RUNNER_TEMP}/sccache-turbo-proxy.pid) 2>/dev/null || true
           sleep 1
           rm -f ${RUNNER_TEMP}/sccache-turbo-proxy.pid
         fi
-        # Show sccache debug log — focus on cache misses to understand key differences
-        if [ -f ${RUNNER_TEMP}/sccache-debug.log ]; then
-          SLOG=${RUNNER_TEMP}/sccache-debug.log
-          echo "=== sccache debug log: line count ==="
-          wc -l "$SLOG"
-          echo "=== sccache debug log: full ==="
-          cat "$SLOG"
-        else
-          echo "=== sccache debug log: NOT FOUND ==="
-        fi
-
-        # Show proxy log
+        # Show proxy log summary
         if [ -f ${RUNNER_TEMP}/sccache-turbo-proxy.log ]; then
           LOGF=${RUNNER_TEMP}/sccache-turbo-proxy.log
-          echo "=== proxy log: line count ==="
-          wc -l "$LOGF"
           echo "=== proxy log: method summary ==="
           sed 's/^[^ ]* //' "$LOGF" | cut -d' ' -f1 | sort | uniq -c | sort -rn || true
-          echo "=== proxy log: PUT lines (last 20) ==="
-          grep ' PUT ' "$LOGF" | tail -20 || echo "(no PUTs found)"
-          echo "=== proxy log: ERROR lines ==="
-          grep -i 'ERROR' "$LOGF" | tail -20 || echo "(no errors)"
-          echo "=== proxy log: GET results summary ==="
+          echo "=== proxy log: GET results ==="
           grep ' GET ' "$LOGF" | sed 's/.* -> //' | sort | uniq -c | sort -rn || true
-          echo "=== proxy log: last 100 ==="
-          tail -100 "$LOGF"
-          echo "=== proxy log: full log ==="
-          cat "$LOGF"
+          echo "=== proxy log: last 20 ==="
+          tail -20 "$LOGF"
         fi

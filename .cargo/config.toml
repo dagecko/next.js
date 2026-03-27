@@ -35,11 +35,9 @@ rustflags = [
   # Share monomorphized generics across crates to reduce binary size (~20MB).
   # https://github.com/davidlattimore/duplicate-function-checker
   "-Zshare-generics=y",
-  # Parallel rustc frontend (-Zthreads=N) produces non-deterministic rmeta
-  # output, breaking sccache cache keys. Disabled until upstream fix lands.
-  # https://github.com/rust-lang/rust/issues/140425
-  # https://github.com/rust-lang/rust/issues/129080
-  "-Zthreads=1",
+  # Use up to 8 threads in the rustc frontend for parallel parsing/expansion.
+  # https://blog.rust-lang.org/2023/11/09/parallel-rustc.html
+  "-Zthreads=8",
   # Unlock nightly-only options
   "-Zunstable-options",
 ]

@@ -266,8 +266,6 @@ jobs:
         with:
           mode: start
           turbo-api: 'https://vercel.com'
-          target: ${{ inputs.buildNativeTarget }}
-          profile: ${{ inputs.rustBuildProfile || 'release-with-assertions' }}
 
       - run: pnpm dlx turbo@${TURBO_VERSION} run build-native-${{ inputs.rustBuildProfile }} ${TURBO_ARGS} --summarize -- --target ${{ inputs.buildNativeTarget }}
         if: ${{ inputs.skipNativeBuild != 'yes' }}
@@ -329,9 +327,6 @@ jobs:
         if: ${{ always() && (inputs.skipNativeBuild != 'yes' || inputs.needsNextest == 'yes' || inputs.needsRust == 'yes') }}
         with:
           mode: stop
-          turbo-api: 'https://vercel.com'
-          target: ${{ inputs.buildNativeTarget }}
-          profile: ${{ inputs.rustBuildProfile || 'release-with-assertions' }}
 
       - name: Upload test result artifacts
         if: ${{ inputs.testReportsArtifactPrefix != '' && inputs.afterBuild && always() }}

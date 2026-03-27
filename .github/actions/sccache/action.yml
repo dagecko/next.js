@@ -12,14 +12,6 @@ inputs:
     description: 'SCCACHE_BASE_DIR for path normalization (default: $GITHUB_WORKSPACE)'
     required: false
     default: ''
-  target:
-    description: 'Rust target triple (e.g. x86_64-pc-windows-msvc) for dep cache key'
-    required: false
-    default: ''
-  profile:
-    description: 'Cargo profile name (e.g. release, release-with-assertions) for dep cache key'
-    required: false
-    default: 'release'
 runs:
   using: 'composite'
   steps:
@@ -29,21 +21,13 @@ runs:
       with:
         tool: sccache@0.14.0
 
-    - name: Restore Rust dep cache
-      if: ${{ inputs.mode == 'start' }}
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.turbo-api }}" ]; then
-          export TURBO_API="${{ inputs.turbo-api }}"
-        fi
-        node scripts/rust-dep-cache.js --restore \
-          --target "${{ inputs.target }}" \
-          --profile "${{ inputs.profile }}"
-
     - name: Configure sccache env + start proxy
       if: ${{ inputs.mode == 'start' }}
       shell: bash
       run: |
+        # Override TURBO_API if the caller specified one (needed when the workflow
+        # overrides TURBO_TOKEN with a Vercel token but the runner's bashrc points
+        # TURBO_API at a self-hosted server that doesn't accept Vercel tokens).
         if [ -n "${{ inputs.turbo-api }}" ]; then
           export TURBO_API="${{ inputs.turbo-api }}"
         fi
@@ -75,21 +59,13 @@ runs:
         sccache --start-server 2>&1 || echo "sccache server may already be running"
         sccache --show-stats 2>&1 | grep "Cache location"
 
-    - name: Stop sccache + save dep cache
+    - name: Stop sccache + show stats
       if: ${{ inputs.mode == 'stop' }}
       shell: bash
       run: |
         echo "=== sccache stats ==="
         sccache --show-stats || true
         sccache --stop-server 2>/dev/null || true
-
-        # Save dep cache (proc-macros, build scripts, fingerprints)
-        if [ -n "${{ inputs.turbo-api }}" ]; then
-          export TURBO_API="${{ inputs.turbo-api }}"
-        fi
-        node scripts/rust-dep-cache.js --save \
-          --target "${{ inputs.target }}" \
-          --profile "${{ inputs.profile }}" || true
 
         # Stop the proxy (sends SIGTERM which triggers log dump)
         if [ -f ${RUNNER_TEMP}/sccache-turbo-proxy.pid ]; then
@@ -104,6 +80,4 @@ runs:
           sed 's/^[^ ]* //' "$LOGF" | cut -d' ' -f1 | sort | uniq -c | sort -rn || true
           echo "=== proxy log: GET results ==="
           grep ' GET ' "$LOGF" | sed 's/.* -> //' | sort | uniq -c | sort -rn || true
-          echo "=== proxy log: last 20 ==="
-          tail -20 "$LOGF"
         fi
